@@ -36,25 +36,37 @@ Run migrations in order:
 - `supabase/migrations/001_initial_schema.sql`
 - `supabase/migrations/002_book_jobs_and_audiobook_url.sql`
 
-## 3) Deploy API (FastAPI)
+## 3) Deploy API (FastAPI) — Railway (recommended)
 
-API app lives in `apps/api`.
+1. Go to **railway.app** → Login with GitHub
+2. Click **New Project** → **Deploy from GitHub repo**
+3. Select `z2mpxm549s-dotcom/BOOKFORGE`
+4. Set **Root Directory** to `apps/api`
+5. Railway auto-detects the Dockerfile and builds it
 
-Docker build command:
+Add these env vars in Railway dashboard:
+```
+ANTHROPIC_API_KEY=<from .env>
+OPENAI_API_KEY=<from .env>
+GEMINI_API_KEY=AIzaSyCmTVjH-kipmq5zMlMZ5lpTAzxD8f04VwU
+ELEVENLABS_API_KEY=<from .env>
+SUPABASE_URL=https://amtaknnojcoahqwkfodg.supabase.co
+SUPABASE_ANON_KEY=<from .env>
+SUPABASE_SERVICE_ROLE_KEY=<from .env>
+SUPABASE_STORAGE_BUCKET=books
+```
 
+6. Once deployed, copy the Railway URL (e.g. `https://bookforge-api.up.railway.app`)
+7. Update `NEXT_PUBLIC_API_URL` in Vercel dashboard to that URL
+
+**Alternative — Render (free tier):**
+- render.yaml is already configured in the repo root
+- Go to render.com → New → Blueprint → Connect GitHub repo
+
+**Local Docker test:**
 ```bash
 docker build -f apps/api/Dockerfile apps/api -t bookforge-api:latest
-```
-
-Run container:
-
-```bash
 docker run --env-file .env -p 8000:8000 bookforge-api:latest
-```
-
-Health check:
-
-```bash
 curl http://localhost:8000/health
 ```
 
