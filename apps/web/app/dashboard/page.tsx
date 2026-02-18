@@ -48,6 +48,16 @@ interface ResearchResult {
   research_sources: string[];
 }
 
+interface GeneratedBookResponse {
+  outline?: {
+    title?: string;
+    [key: string]: unknown;
+  };
+  chapter_1_preview?: string;
+  amazon_listing?: Record<string, unknown>;
+  cover_prompt?: string;
+}
+
 type Step = "idle" | "researching" | "research_done" | "generating" | "done";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -241,6 +251,8 @@ export default function Dashboard() {
       await new Promise((r) => setTimeout(r, 800));
     }
 
+    let data: GeneratedBookResponse;
+
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       const res = await fetch(`${apiUrl}/api/books/generate`, {
@@ -259,22 +271,16 @@ export default function Dashboard() {
       });
 
       if (!res.ok) throw new Error("Generation failed");
-      const data = await res.json();
-      setGeneratedBook({
-        title: data.outline?.title || "Your Book Title",
-        chapter1Preview: data.chapter_1_preview || "",
-        coverPrompt: data.cover_prompt || "",
-        amazonListing: data.amazon_listing || {},
-      });
+      data = await res.json();
     } catch {
       // Mock result for demo
-      setGeneratedBook({
-        title: "Blood Moon: A Fated Mates Paranormal Romance",
-        chapter1Preview:
+      data = {
+        outline: { title: "Blood Moon: A Fated Mates Paranormal Romance" },
+        chapter_1_preview:
           "The scent hit her before she saw him — cedar and storm, something wild and ancient that made her wolf howl in recognition. Maya pressed her back against the cold stone of the library wall, heart hammering. Impossible. She'd been told her fated mate had died in the border wars seven years ago. She'd mourned him. Built a life without him...",
-        coverPrompt:
+        cover_prompt:
           "Professional book cover for 'Blood Moon'. Romantic paranormal atmosphere, glowing moon, silhouette of wolf and woman, deep red and black color palette, modern romance bestseller aesthetic.",
-        amazonListing: {
+        amazon_listing: {
           title: "Blood Moon: A Fated Mates Paranormal Romance",
           price_ebook: 4.99,
           categories: [
@@ -282,7 +288,49 @@ export default function Dashboard() {
             "Romance > Werewolves & Shifters",
           ],
         },
-      });
+      };
+    }
+
+    const generatedTitle = data.outline?.title || "Your Book Title";
+    const chapterPreview = data.chapter_1_preview || "";
+    const coverPrompt = data.cover_prompt || "";
+    const amazonListing = data.amazon_listing || {};
+
+    setGeneratedBook({
+      title: generatedTitle,
+      chapter1Preview: chapterPreview,
+      coverPrompt,
+      amazonListing,
+    });
+
+    try {
+      const supabase = createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (user) {
+        const { error: insertError } = await supabase.from("books").insert({
+          user_id: user.id,
+          title: generatedTitle,
+          genre: selectedOpportunity.genre,
+          subgenre: selectedOpportunity.subgenre,
+          target_audience: selectedOpportunity.target_audience,
+          status: "ready",
+          outline_json: data.outline,
+          chapter_1: chapterPreview,
+          amazon_listing: amazonListing,
+          cover_prompt: coverPrompt,
+          demand_score: selectedOpportunity.demand_score,
+          estimated_revenue: selectedOpportunity.estimated_monthly_revenue,
+        });
+
+        if (insertError) {
+          console.error("Failed to save generated book:", insertError);
+        }
+      }
+    } catch (saveError) {
+      console.error("Unexpected error while saving generated book:", saveError);
     }
 
     setGenerationProgress(100);
@@ -304,6 +352,14 @@ export default function Dashboard() {
             <span className="text-sm text-zinc-400">
               {user?.user_metadata?.full_name || user?.email}
             </span>
+            <Button
+              asChild
+              variant="ghost"
+              size="sm"
+              className="text-zinc-400 hover:text-zinc-100"
+            >
+              <Link href="/library">My Library</Link>
+            </Button>
             <Button
               variant="ghost"
               size="sm"
