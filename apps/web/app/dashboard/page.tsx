@@ -82,7 +82,7 @@ export default function Dashboard() {
   const [research, setResearch] = useState<ResearchResult | null>(null);
   const [selectedOpportunity, setSelectedOpportunity] =
     useState<Opportunity | null>(null);
-  const [aiModel, setAiModel] = useState<"claude" | "gpt-5">("gpt-5");
+  const [aiModel, setAiModel] = useState<"claude" | "gpt-5">("claude");
   const [generationProgress, setGenerationProgress] = useState(0);
   const [generationStep, setGenerationStep] = useState("");
   const [generatedBook, setGeneratedBook] = useState<{
