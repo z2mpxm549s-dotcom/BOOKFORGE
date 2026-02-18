@@ -83,7 +83,7 @@ BOOKFORGE/
 | Language | Python | 3.14 |
 | AI Primary | Anthropic Claude Opus 4.6 | SDK 0.81.0 |
 | AI Fast/Cheap | Anthropic Claude Haiku 4.5 | SDK 0.81.0 |
-| AI Secondary | OpenAI GPT-4 | SDK 2.21.0 |
+| AI Secondary | OpenAI GPT-5 | SDK 2.21.0 |
 | Validation | Pydantic | 2.12.5 |
 | HTTP Client | httpx + aiohttp | 0.28.1 / 3.13.3 |
 
@@ -135,7 +135,7 @@ cd apps/web && npm run dev
 | Service | Key in .env | Status |
 |---------|-------------|--------|
 | Anthropic Claude | `ANTHROPIC_API_KEY` | ✅ Active |
-| OpenAI GPT-4 | `OPENAI_API_KEY` | ✅ Active |
+| OpenAI GPT-5 | `OPENAI_API_KEY` | ✅ Active |
 | Grok (xAI) | `GROK_API_KEY` | ✅ Active |
 | ElevenLabs | `ELEVENLABS_API_KEY` | ✅ Active (not yet used in code) |
 | Gemini (Google) | `GEMINI_API_KEY` | ✅ Active (for image generation) |

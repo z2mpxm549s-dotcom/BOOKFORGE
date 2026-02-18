@@ -8,11 +8,13 @@ import json
 import re
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Literal
 from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 
 router = APIRouter()
-client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+anthropic_client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 # ─── Models ───────────────────────────────────────────────────────────────────
@@ -26,6 +28,7 @@ class BookRequest(BaseModel):
     tone: str = "engaging"               # "engaging", "literary", "commercial", "educational"
     keywords: list[str] = []
     language: str = "en"
+    ai_model: Literal["claude", "gpt-5"] = "claude"   # model selection
 
 
 class BookOutline(BaseModel):
@@ -44,7 +47,30 @@ class BookGenerationResult(BaseModel):
     outline: BookOutline
     chapter_1_preview: str               # Full first chapter as preview
     amazon_listing: dict                 # Ready-to-publish Amazon KDP data
-    cover_prompt: str                    # Prompt to send to Recraft for cover image
+    cover_prompt: str                    # Prompt to send to image AI for cover
+    model_used: str                      # Which AI generated this book
+
+
+# ─── AI Helpers ───────────────────────────────────────────────────────────────
+
+async def call_ai(prompt: str, ai_model: str, max_tokens: int = 3000) -> str:
+    """Routes to Claude or GPT-5 based on model selection."""
+    if ai_model == "gpt-5":
+        response = await openai_client.chat.completions.create(
+            model="gpt-5",
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.choices[0].message.content or ""
+    else:
+        # Default: Claude Opus
+        model = "claude-opus-4-6" if max_tokens > 1500 else "claude-haiku-4-5-20251001"
+        message = await anthropic_client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return message.content[0].text
 
 
 # ─── Generation ───────────────────────────────────────────────────────────────
@@ -82,13 +108,7 @@ Return JSON with this exact structure:
   "amazon_keywords": ["7 specific keywords for Amazon search"]
 }}"""
 
-    message = await client.messages.create(
-        model="claude-opus-4-6",
-        max_tokens=3000,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    raw = message.content[0].text
+    raw = await call_ai(prompt, request.ai_model, max_tokens=3000)
     json_match = re.search(r'\{[\s\S]*\}', raw)
     if not json_match:
         raise HTTPException(status_code=500, detail="Failed to generate outline")
@@ -122,13 +142,7 @@ CRITICAL RULES:
 
 Write the full chapter now:"""
 
-    message = await client.messages.create(
-        model="claude-opus-4-6",
-        max_tokens=4000,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    return message.content[0].text
+    return await call_ai(prompt, request.ai_model, max_tokens=4000)
 
 
 async def generate_amazon_listing(outline: BookOutline, request: BookRequest) -> dict:
@@ -153,13 +167,7 @@ Return JSON:
   "series_info": null
 }}"""
 
-    message = await client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=1500,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    raw = message.content[0].text
+    raw = await call_ai(prompt, request.ai_model, max_tokens=1500)
     json_match = re.search(r'\{[\s\S]*\}', raw)
     if json_match:
         return json.loads(json_match.group())
@@ -167,7 +175,7 @@ Return JSON:
 
 
 def generate_cover_prompt(outline: BookOutline, request: BookRequest) -> str:
-    """Genera el prompt óptimo para Recraft/Midjourney para la portada."""
+    """Genera el prompt óptimo para Gemini Imagen para la portada."""
 
     genre_styles = {
         "romance": "romantic couple, soft lighting, warm colors, elegant typography",
@@ -195,7 +203,7 @@ Quality: Ultra high resolution, print-ready."""
 async def generate_book(request: BookRequest):
     """
     Pipeline completo: genera outline + capítulo 1 + Amazon listing + cover prompt.
-    Todo listo para publicar.
+    Todo listo para publicar. Soporta Claude Opus y GPT-5.
     """
     # Step 1: Generate outline
     outline = await generate_outline(request)
@@ -206,14 +214,17 @@ async def generate_book(request: BookRequest):
     # Step 3: Amazon listing
     amazon_listing = await generate_amazon_listing(outline, request)
 
-    # Step 4: Cover prompt for Recraft
+    # Step 4: Cover prompt for Gemini Imagen
     cover_prompt = generate_cover_prompt(outline, request)
+
+    model_label = "GPT-5" if request.ai_model == "gpt-5" else "Claude Opus 4.6"
 
     return BookGenerationResult(
         outline=outline,
         chapter_1_preview=chapter_1,
         amazon_listing=amazon_listing,
         cover_prompt=cover_prompt,
+        model_used=model_label,
     )
 
 

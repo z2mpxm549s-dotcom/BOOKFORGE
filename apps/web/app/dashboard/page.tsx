@@ -82,6 +82,7 @@ export default function Dashboard() {
   const [research, setResearch] = useState<ResearchResult | null>(null);
   const [selectedOpportunity, setSelectedOpportunity] =
     useState<Opportunity | null>(null);
+  const [aiModel, setAiModel] = useState<"claude" | "gpt-5">("gpt-5");
   const [generationProgress, setGenerationProgress] = useState(0);
   const [generationStep, setGenerationStep] = useState("");
   const [generatedBook, setGeneratedBook] = useState<{
@@ -253,6 +254,7 @@ export default function Dashboard() {
           page_count: 220,
           tone: "engaging",
           language: "en",
+          ai_model: aiModel,
         }),
       });
 
@@ -361,6 +363,29 @@ export default function Dashboard() {
                         }`}
                       >
                         {age}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-zinc-300">AI Model</Label>
+                  <div className="flex gap-2">
+                    {[
+                      { id: "gpt-5", label: "GPT-5", desc: "OpenAI" },
+                      { id: "claude", label: "Claude Opus", desc: "Anthropic" },
+                    ].map((m) => (
+                      <button
+                        key={m.id}
+                        onClick={() => setAiModel(m.id as "claude" | "gpt-5")}
+                        className={`flex flex-col rounded-lg border px-4 py-2.5 text-left text-sm transition-colors ${
+                          aiModel === m.id
+                            ? "border-violet-500 bg-violet-500/20 text-violet-300"
+                            : "border-zinc-700 bg-zinc-800 text-zinc-400 hover:border-zinc-600"
+                        }`}
+                      >
+                        <span className="font-medium">{m.label}</span>
+                        <span className="text-xs opacity-60">{m.desc}</span>
                       </button>
                     ))}
                   </div>
