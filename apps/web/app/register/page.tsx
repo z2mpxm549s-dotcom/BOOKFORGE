@@ -21,8 +21,6 @@ export default function RegisterPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  const supabase = createClient();
-
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -34,6 +32,7 @@ export default function RegisterPage() {
       return;
     }
 
+    const supabase = createClient();
     const { error } = await supabase.auth.signUp({
       email,
       password,
@@ -57,6 +56,7 @@ export default function RegisterPage() {
     setGoogleLoading(true);
     setError(null);
 
+    const supabase = createClient();
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
