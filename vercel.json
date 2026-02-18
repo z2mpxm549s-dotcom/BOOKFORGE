@@ -3,5 +3,11 @@
   "rootDirectory": "apps/web",
   "buildCommand": "npm run build",
   "outputDirectory": ".next",
-  "installCommand": "npm install"
+  "installCommand": "npm install",
+  "crons": [
+    {
+      "path": "/api/cron/reset-credits",
+      "schedule": "0 0 1 * *"
+    }
+  ]
 }

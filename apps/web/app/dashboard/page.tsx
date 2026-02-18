@@ -73,6 +73,13 @@ interface GeneratedBookResponse {
   }>;
   cover_image_base64?: string;
   cover_image_mime_type?: string;
+  book_id?: string;
+  plan_used?: "starter" | "pro" | "enterprise";
+  credits_remaining?: number;
+  pdf_url?: string;
+  epub_url?: string;
+  cover_image_url?: string;
+  audiobook_url?: string;
   generation_notes?: string[];
   notification_sent?: boolean;
 }
@@ -124,6 +131,12 @@ export default function Dashboard() {
     fullChapters: GeneratedBookResponse["full_chapters"] | null;
     coverImageBase64: string | null;
     coverImageMimeType: string | null;
+    bookId: string | null;
+    pdfUrl: string | null;
+    epubUrl: string | null;
+    coverImageUrl: string | null;
+    audiobookUrl: string | null;
+    creditsRemaining: number | null;
     generationNotes: string[];
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -301,30 +314,111 @@ export default function Dashboard() {
 
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      const res = await fetch(`${apiUrl}/api/books/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          genre: selectedOpportunity.genre,
-          subgenre: selectedOpportunity.subgenre,
-          target_audience: selectedOpportunity.target_audience,
-          keywords: selectedOpportunity.keywords,
-          page_count: 220,
-          tone: "engaging",
-          language: "en",
-          ai_model: aiModel,
-          plan,
-          generate_full_book: plan === "pro" || plan === "enterprise",
-          generate_cover_image: plan === "pro" || plan === "enterprise",
-          generate_audiobook: false,
-          recipient_email: user?.email || undefined,
-        }),
-      });
+      const supabase = createClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
 
-      if (!res.ok) throw new Error("Generation failed");
-      data = await res.json();
-    } catch {
-      // Mock result for demo
+      if (!session?.access_token) {
+        throw new Error("Your session expired. Please sign in again.");
+      }
+
+      const payload = {
+        genre: selectedOpportunity.genre,
+        subgenre: selectedOpportunity.subgenre,
+        target_audience: selectedOpportunity.target_audience,
+        keywords: selectedOpportunity.keywords,
+        page_count: 220,
+        tone: "engaging",
+        language: "en",
+        ai_model: aiModel,
+        plan,
+        generate_full_book: plan === "pro" || plan === "enterprise",
+        generate_cover_image: plan === "pro" || plan === "enterprise",
+        generate_audiobook: false,
+        recipient_email: user?.email || undefined,
+        demand_score: selectedOpportunity.demand_score,
+        estimated_revenue: selectedOpportunity.estimated_monthly_revenue,
+      };
+
+      if (plan === "pro" || plan === "enterprise") {
+        const startRes = await fetch(`${apiUrl}/api/books/generate-async`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!startRes.ok) {
+          const err = await startRes.text();
+          throw new Error(err || "Generation start failed");
+        }
+
+        const job = await startRes.json();
+        if (!job?.job_id) throw new Error("Invalid generation job response");
+
+        const timeoutMs = 15 * 60 * 1000;
+        const startTime = Date.now();
+
+        while (true) {
+          if (Date.now() - startTime > timeoutMs) {
+            throw new Error("Generation timed out. Please try again.");
+          }
+
+          await new Promise((r) => setTimeout(r, 1800));
+          const statusRes = await fetch(`${apiUrl}/api/books/jobs/${job.job_id}`, {
+            headers: {
+              Authorization: `Bearer ${session.access_token}`,
+            },
+          });
+          if (!statusRes.ok) throw new Error("Could not read generation status");
+          const status = await statusRes.json();
+
+          if (typeof status.progress === "number") {
+            setGenerationProgress(Math.min(99, Math.max(status.progress, 10)));
+          }
+          if (status.step) setGenerationStep(status.step);
+
+          if (status.status === "completed") {
+            data = status.result as GeneratedBookResponse;
+            break;
+          }
+          if (status.status === "failed") {
+            throw new Error(status.error || "Generation failed");
+          }
+        }
+      } else {
+        const res = await fetch(`${apiUrl}/api/books/generate`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          const err = await res.text();
+          throw new Error(err || "Generation failed");
+        }
+        data = await res.json();
+      }
+    } catch (generationError) {
+      const message =
+        generationError instanceof Error
+          ? generationError.message
+          : "Book generation failed.";
+      const allowMock = process.env.NODE_ENV !== "production";
+
+      if (!allowMock) {
+        setError(message);
+        setStep("research_done");
+        return;
+      }
+
+      // Mock result for local fallback
       data = {
         outline: {
           title: "Blood Moon: A Fated Mates Paranormal Romance",
@@ -351,7 +445,9 @@ export default function Dashboard() {
             "Romance > Werewolves & Shifters",
           ],
         },
+        credits_remaining: undefined,
       };
+      setError(`Using local demo fallback: ${message}`);
     }
 
     const generatedTitle = data.outline?.title || "Your Book Title";
@@ -371,43 +467,20 @@ export default function Dashboard() {
       fullChapters,
       coverImageBase64: data.cover_image_base64 || null,
       coverImageMimeType: data.cover_image_mime_type || null,
+      bookId: data.book_id || null,
+      pdfUrl: data.pdf_url || null,
+      epubUrl: data.epub_url || null,
+      coverImageUrl: data.cover_image_url || null,
+      audiobookUrl: data.audiobook_url || null,
+      creditsRemaining:
+        typeof data.credits_remaining === "number" ? data.credits_remaining : null,
       generationNotes,
     });
 
-    if (generationNotes.length > 0) {
-      setError(generationNotes.join(" "));
+    if (data.plan_used) {
+      setPlan(data.plan_used);
     }
-
-    try {
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (user) {
-        const { error: insertError } = await supabase.from("books").insert({
-          user_id: user.id,
-          title: generatedTitle,
-          genre: selectedOpportunity.genre,
-          subgenre: selectedOpportunity.subgenre,
-          target_audience: selectedOpportunity.target_audience,
-          status: "ready",
-          outline_json: data.outline,
-          chapter_1: chapterPreview,
-          amazon_listing: amazonListing,
-          cover_prompt: coverPrompt,
-          demand_score: selectedOpportunity.demand_score,
-          estimated_revenue: selectedOpportunity.estimated_monthly_revenue,
-        });
-
-        if (insertError) {
-          console.error("Failed to save generated book:", insertError);
-        }
-      }
-    } catch (saveError) {
-      console.error("Unexpected error while saving generated book:", saveError);
-      setError("Book generated, but saving to library failed.");
-    }
+    if (generationNotes.length > 0) setError(generationNotes.join(" "));
 
     setGenerationProgress(100);
     setGenerationStep("Book generated successfully!");
@@ -419,6 +492,18 @@ export default function Dashboard() {
     if (!generatedBook) return;
     setDownloadLoading(format);
     setError(null);
+
+    const storedUrl = format === "pdf" ? generatedBook.pdfUrl : generatedBook.epubUrl;
+    if (storedUrl) {
+      const a = document.createElement("a");
+      a.href = storedUrl;
+      a.target = "_blank";
+      a.rel = "noreferrer";
+      a.download = `${generatedBook.title}.${format}`;
+      a.click();
+      setDownloadLoading(null);
+      return;
+    }
 
     const chaptersForExport =
       generatedBook.fullChapters && generatedBook.fullChapters.length > 0
@@ -469,6 +554,17 @@ export default function Dashboard() {
     setError(null);
 
     try {
+      if (generatedBook.audiobookUrl) {
+        const a = document.createElement("a");
+        a.href = generatedBook.audiobookUrl;
+        a.target = "_blank";
+        a.rel = "noreferrer";
+        a.download = `${generatedBook.title}_audiobook_preview.mp3`;
+        a.click();
+        setDownloadLoading(null);
+        return;
+      }
+
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       const text =
         generatedBook.fullChapters && generatedBook.fullChapters.length > 0
@@ -476,14 +572,24 @@ export default function Dashboard() {
               .map((chapter) => chapter.content || chapter.summary || "")
               .join("\n\n")
           : generatedBook.chapter1Preview;
+      const supabase = createClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        throw new Error("Session expired");
+      }
 
       const res = await fetch(`${apiUrl}/api/books/audiobook`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
         body: JSON.stringify({
           title: generatedBook.title,
           text,
-          plan,
         }),
       });
 
@@ -781,6 +887,12 @@ export default function Dashboard() {
                   <span className="text-zinc-400">
                     Plan: <span className="capitalize text-zinc-200">{plan}</span>
                   </span>
+                  {generatedBook.creditsRemaining !== null && (
+                    <span className="text-zinc-400">
+                      Credits left:{" "}
+                      <span className="text-zinc-200">{generatedBook.creditsRemaining}</span>
+                    </span>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -827,14 +939,18 @@ export default function Dashboard() {
             )}
 
             {/* Generated cover preview */}
-            {generatedBook.coverImageBase64 && (
+            {(generatedBook.coverImageBase64 || generatedBook.coverImageUrl) && (
               <Card className="mb-6 border-zinc-800 bg-zinc-900">
                 <CardHeader>
                   <CardTitle className="text-base">Generated Cover (Gemini)</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <Image
-                    src={`data:${generatedBook.coverImageMimeType || "image/png"};base64,${generatedBook.coverImageBase64}`}
+                    src={
+                      generatedBook.coverImageBase64
+                        ? `data:${generatedBook.coverImageMimeType || "image/png"};base64,${generatedBook.coverImageBase64}`
+                        : (generatedBook.coverImageUrl as string)
+                    }
                     alt="Generated book cover"
                     width={420}
                     height={630}

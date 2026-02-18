@@ -19,6 +19,9 @@ interface Book {
   status: string | null;
   demand_score: number | null;
   created_at: string;
+  pdf_url?: string | null;
+  epub_url?: string | null;
+  cover_image_url?: string | null;
 }
 
 const statusClasses: Record<string, string> = {
@@ -186,10 +189,11 @@ export default function LibraryPage() {
                     <span className="text-zinc-300">{formatDate(book.created_at)}</span>
                   </div>
                   <Button
+                    asChild
                     variant="outline"
                     className="w-full border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
                   >
-                    View
+                    <Link href={`/library/${book.id}`}>View</Link>
                   </Button>
                 </CardContent>
               </Card>

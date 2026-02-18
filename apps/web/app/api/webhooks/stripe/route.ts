@@ -3,7 +3,7 @@ import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2025-01-27.acacia",
+  apiVersion: "2026-01-28.clover",
 });
 
 // Service role client — bypasses RLS for webhook operations
@@ -17,6 +17,48 @@ const PLAN_CREDITS: Record<string, number> = {
   pro: 5,
   enterprise: 20,
 };
+
+async function sendBillingEmail(to: string, subject: string, html: string) {
+  if (!process.env.RESEND_API_KEY) return;
+
+  try {
+    await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: process.env.RESEND_FROM_EMAIL || "BOOKFORGE <onboarding@resend.dev>",
+        to: [to],
+        subject,
+        html,
+      }),
+    });
+  } catch (err) {
+    console.error("Failed to send billing email:", err);
+  }
+}
+
+async function getProfileEmailByUserId(userId: string) {
+  const { data } = await supabaseAdmin
+    .from("profiles")
+    .select("email")
+    .eq("id", userId)
+    .single();
+
+  return data?.email || null;
+}
+
+async function getProfileByCustomerId(customerId: string) {
+  const { data } = await supabaseAdmin
+    .from("profiles")
+    .select("id,email,plan")
+    .eq("stripe_customer_id", customerId)
+    .single();
+
+  return data || null;
+}
 
 async function activatePlan(userId: string, plan: string, subscriptionId: string, customerId: string, periodEnd: number) {
   const credits = PLAN_CREDITS[plan] ?? 1;
@@ -69,15 +111,32 @@ export async function POST(req: NextRequest) {
 
         if (!userId || !plan || !session.subscription || !session.customer) break;
 
-        const subscription = await stripe.subscriptions.retrieve(session.subscription as string);
+        const subscriptionResponse = await stripe.subscriptions.retrieve(
+          session.subscription as string
+        );
+        const subscription = subscriptionResponse as unknown as Stripe.Subscription;
+        const periodEndUnix = Number(
+          (subscription as unknown as { current_period_end?: number }).current_period_end ??
+            Math.floor(Date.now() / 1000)
+        );
 
         await activatePlan(
           userId,
           plan,
           subscription.id,
           session.customer as string,
-          subscription.current_period_end
+          periodEndUnix
         );
+
+        const email = await getProfileEmailByUserId(userId);
+        if (email) {
+          await sendBillingEmail(
+            email,
+            `BOOKFORGE ${plan} plan activated`,
+            `<p>Your <strong>${plan}</strong> plan is now active.</p>
+             <p>You can manage billing anytime in Settings.</p>`
+          );
+        }
         break;
       }
 
@@ -93,7 +152,12 @@ export async function POST(req: NextRequest) {
           .update({
             plan,
             status: subscription.status,
-            current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
+            current_period_end: new Date(
+              Number(
+                (subscription as unknown as { current_period_end?: number }).current_period_end ??
+                  Math.floor(Date.now() / 1000)
+              ) * 1000
+            ).toISOString(),
             cancel_at_period_end: subscription.cancel_at_period_end,
           })
           .eq("stripe_subscription_id", subscription.id);
@@ -103,6 +167,15 @@ export async function POST(req: NextRequest) {
             .from("profiles")
             .update({ plan, credits_remaining: PLAN_CREDITS[plan] ?? 1 })
             .eq("id", userId);
+
+          const email = await getProfileEmailByUserId(userId);
+          if (email && subscription.cancel_at_period_end) {
+            await sendBillingEmail(
+              email,
+              "BOOKFORGE subscription update",
+              "<p>Your subscription is active but set to cancel at period end.</p>"
+            );
+          }
         }
         break;
       }
@@ -122,6 +195,15 @@ export async function POST(req: NextRequest) {
           .from("subscriptions")
           .update({ status: "canceled" })
           .eq("stripe_subscription_id", subscription.id);
+
+        const email = await getProfileEmailByUserId(userId);
+        if (email) {
+          await sendBillingEmail(
+            email,
+            "BOOKFORGE subscription canceled",
+            "<p>Your paid subscription has been canceled and your account moved to Starter.</p>"
+          );
+        }
         break;
       }
 
@@ -129,17 +211,21 @@ export async function POST(req: NextRequest) {
         const invoice = event.data.object as Stripe.Invoice;
         const customerId = invoice.customer as string;
 
-        const { data: profile } = await supabaseAdmin
-          .from("profiles")
-          .select("id")
-          .eq("stripe_customer_id", customerId)
-          .single();
+        const profile = await getProfileByCustomerId(customerId);
 
         if (profile) {
           await supabaseAdmin
             .from("subscriptions")
             .update({ status: "past_due" })
             .eq("stripe_customer_id", customerId);
+
+          if (profile.email) {
+            await sendBillingEmail(
+              profile.email,
+              "BOOKFORGE payment failed",
+              "<p>We could not process your payment. Please update your card in billing settings.</p>"
+            );
+          }
         }
         break;
       }
