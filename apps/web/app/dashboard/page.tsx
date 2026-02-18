@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -18,8 +19,11 @@ import {
   BarChart3,
   Download,
   ChevronRight,
+  LogOut,
 } from "lucide-react";
 import Link from "next/link";
+import { createClient } from "@/lib/supabase/client";
+import type { User } from "@supabase/supabase-js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -69,6 +73,9 @@ const trendColor = (direction: string) => {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
+  const router = useRouter();
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [step, setStep] = useState<Step>("idle");
   const [topic, setTopic] = useState("");
   const [targetAge, setTargetAge] = useState("adults");
@@ -84,6 +91,33 @@ export default function Dashboard() {
     amazonListing: Record<string, unknown>;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // ─── Auth check ───────────────────────────────────────────
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) {
+        router.replace("/login?redirect=/dashboard");
+      } else {
+        setUser(user);
+        setAuthLoading(false);
+      }
+    });
+  }, [router]);
+
+  async function handleSignOut() {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.replace("/login");
+  }
+
+  if (authLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-zinc-950">
+        <Loader2 className="h-6 w-6 animate-spin text-violet-400" />
+      </div>
+    );
+  }
 
   // Mock data for when API is not yet connected
   const mockResearch: ResearchResult = {
@@ -264,9 +298,19 @@ export default function Dashboard() {
             <Sparkles className="h-5 w-5 text-violet-400" />
             <span className="font-bold tracking-tight">BOOKFORGE</span>
           </Link>
-          <Badge className="border-zinc-700 bg-zinc-800 text-zinc-300">
-            Pro Plan
-          </Badge>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-zinc-400">
+              {user?.user_metadata?.full_name || user?.email}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleSignOut}
+              className="text-zinc-400 hover:text-zinc-100"
+            >
+              <LogOut className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </header>
 
