@@ -6,7 +6,11 @@ app = FastAPI(title="BOOKFORGE API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://bookforgehq.vercel.app"],
+    allow_origins=[
+        "http://localhost:3000",
+        "https://bookforgehq.vercel.app",
+        "https://bookforgehq.com",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
