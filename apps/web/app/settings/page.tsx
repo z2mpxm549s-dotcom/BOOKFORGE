@@ -65,6 +65,7 @@ function SettingsContent() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
+  const [portalLoading, setPortalLoading] = useState(false);
 
   const success = searchParams.get("success") === "1";
   const canceled = searchParams.get("canceled") === "1";
@@ -107,6 +108,19 @@ function SettingsContent() {
     } catch (err) {
       console.error("Checkout error:", err);
       setCheckoutLoading(null);
+    }
+  }
+
+  async function handleManageBilling() {
+    setPortalLoading(true);
+    try {
+      const res = await fetch("/api/billing-portal", { method: "POST" });
+      const { url, error } = await res.json();
+      if (error) throw new Error(error);
+      window.location.href = url;
+    } catch (err) {
+      console.error("Portal error:", err);
+      setPortalLoading(false);
     }
   }
 
@@ -196,9 +210,10 @@ function SettingsContent() {
             <Button
               variant="outline"
               className="border-zinc-700 text-zinc-300 hover:bg-zinc-800"
-              onClick={() => handleUpgrade(currentPlan)}
+              onClick={handleManageBilling}
+              disabled={portalLoading}
             >
-              Manage Billing
+              {portalLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Manage Billing"}
             </Button>
           </CardContent>
         </Card>

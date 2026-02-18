@@ -637,7 +637,32 @@ export default function Dashboard() {
 
             {/* Actions */}
             <div className="flex flex-wrap gap-3">
-              <Button className="gap-2 bg-violet-600 hover:bg-violet-500 text-white">
+              <Button
+                className="gap-2 bg-violet-600 hover:bg-violet-500 text-white"
+                onClick={async () => {
+                  if (!generatedBook || !research) return;
+                  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+                  const res = await fetch(`${apiUrl}/api/export/pdf`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      title: generatedBook.title,
+                      genre: selectedOpportunity?.genre,
+                      back_cover_description: (generatedBook.amazonListing as Record<string, string>)?.description || "",
+                      chapter_1_content: generatedBook.chapter1Preview,
+                      chapters: [],
+                    }),
+                  });
+                  if (!res.ok) return;
+                  const blob = await res.blob();
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `${generatedBook.title}.pdf`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+              >
                 <Download className="h-4 w-4" />
                 Download PDF
               </Button>
