@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -51,11 +52,29 @@ interface ResearchResult {
 interface GeneratedBookResponse {
   outline?: {
     title?: string;
+    subtitle?: string | null;
+    back_cover_description?: string;
+    chapters?: Array<{
+      number: number;
+      title: string;
+      summary?: string;
+      content?: string;
+    }>;
     [key: string]: unknown;
   };
   chapter_1_preview?: string;
   amazon_listing?: Record<string, unknown>;
   cover_prompt?: string;
+  full_chapters?: Array<{
+    number: number;
+    title: string;
+    summary?: string;
+    content?: string;
+  }>;
+  cover_image_base64?: string;
+  cover_image_mime_type?: string;
+  generation_notes?: string[];
+  notification_sent?: boolean;
 }
 
 type Step = "idle" | "researching" | "research_done" | "generating" | "done";
@@ -85,6 +104,7 @@ const trendColor = (direction: string) => {
 export default function Dashboard() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
+  const [plan, setPlan] = useState<"starter" | "pro" | "enterprise">("starter");
   const [authLoading, setAuthLoading] = useState(true);
   const [step, setStep] = useState<Step>("idle");
   const [topic, setTopic] = useState("");
@@ -100,20 +120,45 @@ export default function Dashboard() {
     chapter1Preview: string;
     coverPrompt: string;
     amazonListing: Record<string, unknown>;
+    outline: GeneratedBookResponse["outline"] | null;
+    fullChapters: GeneratedBookResponse["full_chapters"] | null;
+    coverImageBase64: string | null;
+    coverImageMimeType: string | null;
+    generationNotes: string[];
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [downloadLoading, setDownloadLoading] = useState<"pdf" | "epub" | "audio" | null>(null);
 
   // ─── Auth check ───────────────────────────────────────────
   useEffect(() => {
     const supabase = createClient();
-    supabase.auth.getUser().then(({ data: { user } }) => {
+    async function loadUser() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
       if (!user) {
         router.replace("/login?redirect=/dashboard");
-      } else {
-        setUser(user);
-        setAuthLoading(false);
+        return;
       }
-    });
+
+      setUser(user);
+
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("plan")
+        .eq("id", user.id)
+        .single();
+
+      const userPlan = profile?.plan;
+      if (userPlan === "starter" || userPlan === "pro" || userPlan === "enterprise") {
+        setPlan(userPlan);
+      }
+
+      setAuthLoading(false);
+    }
+
+    loadUser();
   }, [router]);
 
   async function handleSignOut() {
@@ -236,6 +281,7 @@ export default function Dashboard() {
     if (!selectedOpportunity) return;
     setStep("generating");
     setGenerationProgress(0);
+    setError(null);
 
     const steps = [
       { label: "Analyzing market data...", progress: 15 },
@@ -267,6 +313,11 @@ export default function Dashboard() {
           tone: "engaging",
           language: "en",
           ai_model: aiModel,
+          plan,
+          generate_full_book: plan === "pro" || plan === "enterprise",
+          generate_cover_image: plan === "pro" || plan === "enterprise",
+          generate_audiobook: false,
+          recipient_email: user?.email || undefined,
         }),
       });
 
@@ -275,7 +326,19 @@ export default function Dashboard() {
     } catch {
       // Mock result for demo
       data = {
-        outline: { title: "Blood Moon: A Fated Mates Paranormal Romance" },
+        outline: {
+          title: "Blood Moon: A Fated Mates Paranormal Romance",
+          subtitle: "A Fated Mates Paranormal Romance",
+          back_cover_description:
+            "Maya believed her fated mate was dead. When a scent from her past drags her into a war between rival packs, she must decide whether to trust fate one more time.",
+          chapters: [
+            {
+              number: 1,
+              title: "Moonbound",
+              summary: "Maya senses her mate is alive and is forced back into pack politics.",
+            },
+          ],
+        },
         chapter_1_preview:
           "The scent hit her before she saw him — cedar and storm, something wild and ancient that made her wolf howl in recognition. Maya pressed her back against the cold stone of the library wall, heart hammering. Impossible. She'd been told her fated mate had died in the border wars seven years ago. She'd mourned him. Built a life without him...",
         cover_prompt:
@@ -295,13 +358,25 @@ export default function Dashboard() {
     const chapterPreview = data.chapter_1_preview || "";
     const coverPrompt = data.cover_prompt || "";
     const amazonListing = data.amazon_listing || {};
+    const outline = data.outline || null;
+    const fullChapters = data.full_chapters || null;
+    const generationNotes = data.generation_notes || [];
 
     setGeneratedBook({
       title: generatedTitle,
       chapter1Preview: chapterPreview,
       coverPrompt,
       amazonListing,
+      outline,
+      fullChapters,
+      coverImageBase64: data.cover_image_base64 || null,
+      coverImageMimeType: data.cover_image_mime_type || null,
+      generationNotes,
     });
+
+    if (generationNotes.length > 0) {
+      setError(generationNotes.join(" "));
+    }
 
     try {
       const supabase = createClient();
@@ -331,12 +406,102 @@ export default function Dashboard() {
       }
     } catch (saveError) {
       console.error("Unexpected error while saving generated book:", saveError);
+      setError("Book generated, but saving to library failed.");
     }
 
     setGenerationProgress(100);
     setGenerationStep("Book generated successfully!");
     await new Promise((r) => setTimeout(r, 500));
     setStep("done");
+  }
+
+  async function downloadExport(format: "pdf" | "epub") {
+    if (!generatedBook) return;
+    setDownloadLoading(format);
+    setError(null);
+
+    const chaptersForExport =
+      generatedBook.fullChapters && generatedBook.fullChapters.length > 0
+        ? generatedBook.fullChapters
+        : generatedBook.outline?.chapters || [];
+
+    const backCoverDescription =
+      generatedBook.outline?.back_cover_description ||
+      (generatedBook.amazonListing.description_html as string) ||
+      "";
+
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const res = await fetch(`${apiUrl}/api/export/${format}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: generatedBook.title,
+          subtitle: generatedBook.outline?.subtitle || null,
+          author: user?.user_metadata?.full_name || "BOOKFORGE AI",
+          genre: selectedOpportunity?.genre || null,
+          back_cover_description: backCoverDescription,
+          chapter_1_content: generatedBook.chapter1Preview,
+          chapters: chaptersForExport,
+        }),
+      });
+
+      if (!res.ok) throw new Error(`${format.toUpperCase()} export failed`);
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${generatedBook.title}.${format}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (exportError) {
+      console.error(`${format.toUpperCase()} export failed:`, exportError);
+      setError(`Could not export ${format.toUpperCase()}. Try again.`);
+    } finally {
+      setDownloadLoading(null);
+    }
+  }
+
+  async function downloadAudiobookPreview() {
+    if (!generatedBook || plan !== "enterprise") return;
+    setDownloadLoading("audio");
+    setError(null);
+
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const text =
+        generatedBook.fullChapters && generatedBook.fullChapters.length > 0
+          ? generatedBook.fullChapters
+              .map((chapter) => chapter.content || chapter.summary || "")
+              .join("\n\n")
+          : generatedBook.chapter1Preview;
+
+      const res = await fetch(`${apiUrl}/api/books/audiobook`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: generatedBook.title,
+          text,
+          plan,
+        }),
+      });
+
+      if (!res.ok) throw new Error("Audiobook generation failed");
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${generatedBook.title}_audiobook_preview.mp3`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (audioError) {
+      console.error("Audiobook generation failed:", audioError);
+      setError("Could not generate audiobook preview.");
+    } finally {
+      setDownloadLoading(null);
+    }
   }
 
   return (
@@ -349,6 +514,9 @@ export default function Dashboard() {
             <span className="font-bold tracking-tight">BOOKFORGE</span>
           </Link>
           <div className="flex items-center gap-3">
+            <Badge className="border-violet-500/30 bg-violet-500/10 text-violet-300 capitalize">
+              {plan}
+            </Badge>
             <span className="text-sm text-zinc-400">
               {user?.user_metadata?.full_name || user?.email}
             </span>
@@ -373,6 +541,11 @@ export default function Dashboard() {
       </header>
 
       <main className="mx-auto max-w-4xl px-6 py-10">
+        {error && (
+          <div className="mb-6 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            {error}
+          </div>
+        )}
         {/* ── STEP 0: Idle ── */}
         {step === "idle" && (
           <div>
@@ -605,6 +778,9 @@ export default function Dashboard() {
                   <span className="flex items-center gap-1 text-green-400">
                     {selectedOpportunity?.estimated_monthly_revenue}/mo potential
                   </span>
+                  <span className="text-zinc-400">
+                    Plan: <span className="capitalize text-zinc-200">{plan}</span>
+                  </span>
                 </div>
               </CardContent>
             </Card>
@@ -635,44 +811,95 @@ export default function Dashboard() {
               </CardContent>
             </Card>
 
+            {/* Full book generation info */}
+            {generatedBook.fullChapters && generatedBook.fullChapters.length > 0 && (
+              <Card className="mb-6 border-zinc-800 bg-zinc-900">
+                <CardHeader>
+                  <CardTitle className="text-base">Full Manuscript Generated</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-zinc-300">
+                    {generatedBook.fullChapters.length} chapters drafted for this book.
+                    You can export the complete manuscript to PDF or EPUB.
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Generated cover preview */}
+            {generatedBook.coverImageBase64 && (
+              <Card className="mb-6 border-zinc-800 bg-zinc-900">
+                <CardHeader>
+                  <CardTitle className="text-base">Generated Cover (Gemini)</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <Image
+                    src={`data:${generatedBook.coverImageMimeType || "image/png"};base64,${generatedBook.coverImageBase64}`}
+                    alt="Generated book cover"
+                    width={420}
+                    height={630}
+                    className="mx-auto w-full max-w-xs rounded-lg border border-zinc-700"
+                  />
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Generation notes */}
+            {generatedBook.generationNotes.length > 0 && (
+              <Card className="mb-6 border-yellow-500/20 bg-yellow-500/10">
+                <CardHeader>
+                  <CardTitle className="text-base text-yellow-300">Generation Notes</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2 text-sm text-yellow-200">
+                  {generatedBook.generationNotes.map((note) => (
+                    <p key={note}>{note}</p>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
+
             {/* Actions */}
             <div className="flex flex-wrap gap-3">
               <Button
                 className="gap-2 bg-violet-600 hover:bg-violet-500 text-white"
-                onClick={async () => {
-                  if (!generatedBook || !research) return;
-                  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-                  const res = await fetch(`${apiUrl}/api/export/pdf`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      title: generatedBook.title,
-                      genre: selectedOpportunity?.genre,
-                      back_cover_description: (generatedBook.amazonListing as Record<string, string>)?.description || "",
-                      chapter_1_content: generatedBook.chapter1Preview,
-                      chapters: [],
-                    }),
-                  });
-                  if (!res.ok) return;
-                  const blob = await res.blob();
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = `${generatedBook.title}.pdf`;
-                  a.click();
-                  URL.revokeObjectURL(url);
-                }}
+                onClick={() => downloadExport("pdf")}
+                disabled={downloadLoading !== null}
               >
-                <Download className="h-4 w-4" />
+                {downloadLoading === "pdf" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Download className="h-4 w-4" />
+                )}
                 Download PDF
               </Button>
               <Button
                 variant="outline"
                 className="gap-2 border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                onClick={() => downloadExport("epub")}
+                disabled={downloadLoading !== null}
               >
-                <Download className="h-4 w-4" />
+                {downloadLoading === "epub" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Download className="h-4 w-4" />
+                )}
                 Download EPUB
               </Button>
+              {plan === "enterprise" && (
+                <Button
+                  variant="outline"
+                  className="gap-2 border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                  onClick={downloadAudiobookPreview}
+                  disabled={downloadLoading !== null}
+                >
+                  {downloadLoading === "audio" ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4" />
+                  )}
+                  Download Audiobook Preview
+                </Button>
+              )}
               <Button
                 variant="outline"
                 className="gap-2 border-zinc-700 text-zinc-300 hover:bg-zinc-800"
@@ -687,6 +914,7 @@ export default function Dashboard() {
                   setResearch(null);
                   setGeneratedBook(null);
                   setTopic("");
+                  setError(null);
                 }}
                 className="gap-2 text-zinc-500 hover:text-zinc-300"
               >

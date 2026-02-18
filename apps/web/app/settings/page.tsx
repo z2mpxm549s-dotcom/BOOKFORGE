@@ -45,7 +45,7 @@ const PLANS = [
     icon: Crown,
     books: 5,
     popular: true,
-    features: ["5 books per month", "PDF + EPUB export", "Amazon listing", "Market research", "All chapters (coming soon)", "Cover generation (coming soon)"],
+    features: ["5 books per month", "PDF + EPUB export", "Amazon listing", "Market research", "Full chapter generation", "Cover generation (Gemini)"],
   },
   {
     id: "enterprise",
@@ -54,7 +54,7 @@ const PLANS = [
     period: "/mo",
     icon: Building2,
     books: 20,
-    features: ["20 books per month", "PDF + EPUB export", "Amazon listing", "Market research", "All chapters (coming soon)", "Cover generation (coming soon)", "Audiobook — ElevenLabs (coming soon)", "API access (coming soon)"],
+    features: ["20 books per month", "PDF + EPUB export", "Amazon listing", "Market research", "Full chapter generation", "Cover generation (Gemini)", "Audiobook — ElevenLabs preview", "API access (coming soon)"],
   },
 ];
 

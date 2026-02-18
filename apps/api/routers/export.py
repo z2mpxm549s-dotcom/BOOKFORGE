@@ -4,11 +4,15 @@ Serves downloadable files as streaming responses.
 """
 
 import io
+import os
 import re
+import tempfile
+import html
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
+from ebooklib import epub
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
@@ -154,6 +158,17 @@ def paragraphs_from_text(text: str, style) -> list:
     return result
 
 
+def html_paragraphs_from_text(text: str) -> str:
+    """Convert raw text blocks into HTML paragraphs for EPUB."""
+    blocks = []
+    for para in text.strip().split("\n\n"):
+        para = para.strip()
+        if not para:
+            continue
+        blocks.append(f"<p>{html.escape(para)}</p>")
+    return "".join(blocks)
+
+
 # ─── PDF Builder ──────────────────────────────────────────────────────────────
 
 def build_pdf(req: ExportRequest) -> bytes:
@@ -242,6 +257,111 @@ def build_pdf(req: ExportRequest) -> bytes:
     return buffer.getvalue()
 
 
+def build_epub(req: ExportRequest) -> bytes:
+    """Build a valid EPUB 3.0 file from book data."""
+    safe_id = re.sub(r"[^\w-]", "-", req.title.lower())[:80] or "bookforge-book"
+
+    book = epub.EpubBook()
+    book.set_identifier(f"bookforge-{safe_id}")
+    book.set_title(req.title)
+    book.set_language("en")
+    book.add_author(req.author)
+
+    if req.genre:
+        book.add_metadata("DC", "subject", req.genre)
+
+    intro = epub.EpubHtml(title="About This Book", file_name="about.xhtml", lang="en")
+    intro_body = req.back_cover_description or "Generated with BOOKFORGE."
+    intro.content = f"""
+    <html>
+      <head><title>About This Book</title></head>
+      <body>
+        <h1>{html.escape(req.title)}</h1>
+        {"<h2>" + html.escape(req.subtitle) + "</h2>" if req.subtitle else ""}
+        <p><em>{html.escape(req.author)}</em></p>
+        <hr />
+        {html_paragraphs_from_text(intro_body)}
+      </body>
+    </html>
+    """
+
+    chapter_items = [intro]
+    book.add_item(intro)
+
+    raw_chapters = list(req.chapters) if req.chapters else []
+    if req.chapter_1_content:
+        chapter_1_title = (
+            raw_chapters[0].get("title", "Chapter 1") if raw_chapters else "Chapter 1"
+        )
+        chapter_1_number = raw_chapters[0].get("number", 1) if raw_chapters else 1
+        raw_chapters = [
+            {
+                "number": chapter_1_number,
+                "title": chapter_1_title,
+                "content": req.chapter_1_content,
+            },
+            *raw_chapters[1:],
+        ]
+    elif not raw_chapters:
+        raw_chapters = [{"number": 1, "title": "Chapter 1", "content": "Chapter content goes here."}]
+
+    for idx, chapter in enumerate(raw_chapters, start=1):
+        chapter_number = chapter.get("number", idx)
+        chapter_title = chapter.get("title", f"Chapter {chapter_number}")
+        chapter_content = chapter.get("content")
+        if not chapter_content:
+            chapter_summary = chapter.get("summary", "No content available.")
+            chapter_content = f"[Summary] {chapter_summary}"
+
+        chapter_item = epub.EpubHtml(
+            title=str(chapter_title),
+            file_name=f"chapter-{idx:02d}.xhtml",
+            lang="en",
+        )
+        chapter_item.content = f"""
+        <html>
+          <head><title>{html.escape(str(chapter_title))}</title></head>
+          <body>
+            <h1>Chapter {html.escape(str(chapter_number))}</h1>
+            <h2>{html.escape(str(chapter_title))}</h2>
+            {html_paragraphs_from_text(str(chapter_content))}
+          </body>
+        </html>
+        """
+        book.add_item(chapter_item)
+        chapter_items.append(chapter_item)
+
+    nav_css = epub.EpubItem(
+        uid="style_nav",
+        file_name="style/nav.css",
+        media_type="text/css",
+        content="""
+          body { font-family: Georgia, serif; line-height: 1.55; margin: 5%; }
+          h1 { font-size: 1.8em; margin-bottom: 0.4em; }
+          h2 { font-size: 1.2em; margin-bottom: 1.2em; color: #444; }
+          p { margin: 0 0 1em; text-align: justify; }
+          em { color: #666; }
+        """,
+    )
+    book.add_item(nav_css)
+
+    book.toc = tuple(chapter_items)
+    book.spine = ["nav", *chapter_items]
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+
+    temp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as tmp:
+            temp_path = tmp.name
+        epub.write_epub(temp_path, book, {})
+        with open(temp_path, "rb") as generated:
+            return generated.read()
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
 @router.post("/pdf")
@@ -261,5 +381,26 @@ async def export_pdf(req: ExportRequest):
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/epub")
+async def export_epub(req: ExportRequest):
+    """
+    Generate an EPUB file from book data.
+    Returns a downloadable EPUB file.
+    """
+    try:
+        epub_bytes = build_epub(req)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"EPUB generation failed: {str(e)}")
+
+    safe_title = re.sub(r"[^\w\s-]", "", req.title).strip().replace(" ", "_")[:60]
+    filename = f"{safe_title}.epub"
+
+    return StreamingResponse(
+        io.BytesIO(epub_bytes),
+        media_type="application/epub+zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
