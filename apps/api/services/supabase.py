@@ -132,7 +132,7 @@ async def update_book(book_id: str, payload: dict[str, Any]) -> Optional[dict[st
             url,
             params={
                 "id": f"eq.{book_id}",
-                "select": "id,user_id,title,status,pdf_url,epub_url,cover_image_url,created_at",
+                "select": "id,user_id,title,status,pdf_url,epub_url,cover_image_url,audiobook_url,created_at",
                 "limit": 1,
             },
             headers=_service_headers({"Content-Type": "application/json", "Prefer": "return=representation"}),
@@ -141,6 +141,75 @@ async def update_book(book_id: str, payload: dict[str, Any]) -> Optional[dict[st
 
     if response.status_code >= 400:
         raise SupabaseConfigError(f"Failed to update book: {response.text}")
+
+    rows = response.json()
+    return rows[0] if rows else None
+
+
+async def insert_book_job(payload: dict[str, Any]) -> dict[str, Any]:
+    ensure_supabase_configured()
+    url = f"{SUPABASE_URL}/rest/v1/book_jobs"
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.post(
+            url,
+            headers=_service_headers({"Content-Type": "application/json", "Prefer": "return=representation"}),
+            json=payload,
+        )
+
+    if response.status_code >= 400:
+        raise SupabaseConfigError(f"Failed to insert book job: {response.text}")
+
+    rows = response.json()
+    if not rows:
+        raise SupabaseConfigError("Failed to insert book job: empty response")
+    return rows[0]
+
+
+async def update_book_job(job_id: str, payload: dict[str, Any]) -> Optional[dict[str, Any]]:
+    ensure_supabase_configured()
+    url = f"{SUPABASE_URL}/rest/v1/book_jobs"
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.patch(
+            url,
+            params={
+                "id": f"eq.{job_id}",
+                "select": "id,user_id,status,progress,step,result_json,error,created_at,updated_at",
+                "limit": 1,
+            },
+            headers=_service_headers({"Content-Type": "application/json", "Prefer": "return=representation"}),
+            json=payload,
+        )
+
+    if response.status_code >= 400:
+        raise SupabaseConfigError(f"Failed to update book job: {response.text}")
+
+    rows = response.json()
+    return rows[0] if rows else None
+
+
+async def fetch_book_job(job_id: str, user_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+    ensure_supabase_configured()
+    url = f"{SUPABASE_URL}/rest/v1/book_jobs"
+
+    params: dict[str, str] = {
+        "id": f"eq.{job_id}",
+        "select": "id,user_id,status,progress,step,result_json,error,created_at,updated_at",
+        "limit": "1",
+    }
+    if user_id:
+        params["user_id"] = f"eq.{user_id}"
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.get(
+            url,
+            params=params,
+            headers=_service_headers(),
+        )
+
+    if response.status_code >= 400:
+        raise SupabaseConfigError(f"Failed to fetch book job: {response.text}")
 
     rows = response.json()
     return rows[0] if rows else None

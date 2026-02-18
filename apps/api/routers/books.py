@@ -19,7 +19,6 @@ import json
 import os
 import re
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Literal, Optional
 
 import httpx
@@ -32,9 +31,12 @@ from pydantic import BaseModel
 from routers.export import ExportRequest, build_epub, build_pdf
 from services.supabase import (
     SupabaseConfigError,
+    fetch_book_job,
     fetch_profile,
     insert_book,
+    insert_book_job,
     update_book,
+    update_book_job,
     update_profile,
     upload_file,
     verify_user_access_token,
@@ -47,9 +49,6 @@ openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
 RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "BOOKFORGE <onboarding@resend.dev>")
 ELEVENLABS_DEFAULT_VOICE_ID = os.getenv("ELEVENLABS_DEFAULT_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")
-
-BOOK_JOBS: dict[str, dict[str, Any]] = {}
-BOOK_JOB_LOCK = asyncio.Lock()
 
 PlanType = Literal["starter", "pro", "enterprise"]
 ProgressCallback = Optional[Callable[[int, str], Awaitable[None]]]
@@ -143,10 +142,6 @@ class JobCreateResponse(BaseModel):
 # ─── Utility ──────────────────────────────────────────────────────────────────
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def safe_slug(value: str, default: str = "bookforge") -> str:
     cleaned = re.sub(r"[^\w\s-]", "", value).strip().replace(" ", "_")
     return cleaned[:80] if cleaned else default
@@ -207,14 +202,6 @@ def chunk_text_for_audio(text: str, max_chars: int = 4200) -> list[str]:
         chunks.append(current)
 
     return chunks or [text[:max_chars]]
-
-
-async def update_job(job_id: str, patch: dict[str, Any]) -> None:
-    async with BOOK_JOB_LOCK:
-        if job_id not in BOOK_JOBS:
-            return
-        BOOK_JOBS[job_id].update(patch)
-        BOOK_JOBS[job_id]["updated_at"] = now_iso()
 
 
 # ─── AI Helpers ───────────────────────────────────────────────────────────────
@@ -751,6 +738,7 @@ async def run_generation_pipeline(
                 "pdf_url": pdf_url,
                 "epub_url": epub_url,
                 "cover_image_url": cover_image_url,
+                "audiobook_url": audiobook_url,
             },
         )
 
@@ -826,45 +814,52 @@ async def generate_book_async(request_data: BookRequest, request: Request):
     user, profile, plan = await get_authenticated_context(request)
 
     job_id = str(uuid.uuid4())
-    async with BOOK_JOB_LOCK:
-        BOOK_JOBS[job_id] = {
-            "id": job_id,
-            "user_id": user["id"],
-            "status": "queued",
-            "progress": 0,
-            "step": "Queued",
-            "created_at": now_iso(),
-            "updated_at": now_iso(),
-            "result": None,
-            "error": None,
-        }
+    try:
+        await insert_book_job(
+            {
+                "id": job_id,
+                "user_id": user["id"],
+                "status": "queued",
+                "progress": 0,
+                "step": "Queued",
+                "request_json": request_data.model_dump(),
+                "result_json": None,
+                "error": None,
+            }
+        )
+    except SupabaseConfigError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    async def safe_patch(payload: dict[str, Any]) -> None:
+        try:
+            await update_book_job(job_id, payload)
+        except SupabaseConfigError:
+            pass
 
     async def progress(progress: int, step: str) -> None:
-        await update_job(job_id, {"status": "running", "progress": progress, "step": step})
+        await safe_patch({"status": "running", "progress": progress, "step": step})
 
     async def worker() -> None:
         try:
             result = await run_generation_pipeline(request_data, user, profile, plan, progress)
-            await update_job(
-                job_id,
+            await safe_patch(
                 {
                     "status": "completed",
                     "progress": 100,
                     "step": "Done",
-                    "result": result.model_dump(),
+                    "result_json": result.model_dump(),
+                    "error": None,
                 },
             )
         except HTTPException as exc:
-            await update_job(
-                job_id,
+            await safe_patch(
                 {
                     "status": "failed",
-                    "error": exc.detail,
+                    "error": str(exc.detail),
                 },
             )
         except Exception as exc:
-            await update_job(
-                job_id,
+            await safe_patch(
                 {
                     "status": "failed",
                     "error": str(exc),
@@ -879,15 +874,24 @@ async def generate_book_async(request_data: BookRequest, request: Request):
 async def get_book_job(job_id: str, request: Request):
     user, _, _ = await get_authenticated_context(request)
 
-    async with BOOK_JOB_LOCK:
-        job = BOOK_JOBS.get(job_id)
+    try:
+        job = await fetch_book_job(job_id, user["id"])
+    except SupabaseConfigError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.get("user_id") != user["id"]:
-        raise HTTPException(status_code=403, detail="Forbidden")
 
-    return job
+    return {
+        "id": job["id"],
+        "status": job["status"],
+        "progress": job["progress"],
+        "step": job.get("step"),
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+        "result": job.get("result_json"),
+        "error": job.get("error"),
+    }
 
 
 @router.post("/outline-only", response_model=BookOutline)

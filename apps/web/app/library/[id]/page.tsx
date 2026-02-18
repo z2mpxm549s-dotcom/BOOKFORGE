@@ -24,6 +24,7 @@ interface BookDetail {
   cover_image_url: string | null;
   pdf_url: string | null;
   epub_url: string | null;
+  audiobook_url: string | null;
   amazon_listing: Record<string, unknown> | null;
   demand_score: number | null;
   estimated_revenue: string | null;
@@ -186,7 +187,7 @@ export default function LibraryBookDetailPage() {
               </CardHeader>
             </Card>
 
-            {(book.pdf_url || book.epub_url) && (
+            {(book.pdf_url || book.epub_url || book.audiobook_url) && (
               <Card className="border-zinc-800 bg-zinc-900">
                 <CardHeader>
                   <CardTitle className="text-base">Downloads</CardTitle>
@@ -212,6 +213,18 @@ export default function LibraryBookDetailPage() {
                       <a href={book.epub_url} target="_blank" rel="noreferrer">
                         <Download className="h-4 w-4" />
                         Download EPUB
+                      </a>
+                    </Button>
+                  )}
+                  {book.audiobook_url && (
+                    <Button
+                      asChild
+                      variant="outline"
+                      className="gap-2 border-zinc-700 text-zinc-200 hover:bg-zinc-800"
+                    >
+                      <a href={book.audiobook_url} target="_blank" rel="noreferrer">
+                        <Download className="h-4 w-4" />
+                        Download Audiobook
                       </a>
                     </Button>
                   )}
